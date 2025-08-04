@@ -1,0 +1,27 @@
+# Core dependencies
+transformers>=4.36.0
+torch>=2.0.0
+Pillow>=10.0.0
+numpy>=1.24.0
+
+# Vector Database
+qdrant-client>=1.7.0
+
+# Database
+supabase>=2.0.0
+
+# Environment
+python-dotenv>=1.0.0
+
+# Async Support
+aiohttp>=3.9.0
+asyncio>=3.4.3
+
+# Utils
+tqdm>=4.65.0
+einops>=0.7.0
+timm>=0.9.0
+
+# Optional: for faster inference (commented out as they require special setup)
+# xformers>=0.0.23  # for efficient attention
+# flash-attn>=2.3.0  # for Flash Attention 2
