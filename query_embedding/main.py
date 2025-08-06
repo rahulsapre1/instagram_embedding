@@ -3,7 +3,7 @@ CLI tool for searching Instagram profiles using natural language queries.
 """
 import sys
 import argparse
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
@@ -11,6 +11,7 @@ from rich.text import Text
 
 from query_embedding.embedder import QueryEmbedder
 from query_embedding.qdrant_utils import QdrantSearcher
+from query_embedding.follower_utils import FollowerCountConverter
 
 console = Console()
 
@@ -25,87 +26,108 @@ def format_results(profiles: List[Dict[str, Any]]) -> None:
     table.add_column("Rank", style="dim", width=4)
     table.add_column("Username", style="cyan")
     table.add_column("Full Name", style="green")
-    table.add_column("Private", width=8)
+    table.add_column("Followers", style="yellow")
+    table.add_column("Category", style="blue")
+    table.add_column("Type", style="red")
     table.add_column("Score", justify="right")
 
     # Add rows
     for i, profile in enumerate(profiles, 1):
+        payload = profile.payload
         table.add_row(
             str(i),
-            profile["username"],
-            profile["full_name"] or "N/A",
-            "🔒" if profile["is_private"] else "🔓",
-            f"{profile['similarity_score']}%"
+            payload.get("username", "N/A"),
+            payload.get("full_name", "N/A"),
+            f"{payload.get('follower_count', 0):,}",
+            payload.get("follower_category", "N/A"),
+            payload.get("account_type", "N/A"),
+            f"{profile.score:.3f}"
         )
 
-    # Display table
-    console.print("\n[bold]Top Matching Profiles:[/bold]\n")
     console.print(table)
 
-    # Display detailed information for top 3 matches
-    console.print("\n[bold]Top 3 Profiles Details:[/bold]\n")
-    for i, profile in enumerate(profiles[:3], 1):
-        text = Text()
-        text.append(f"\n[{i}] ", style="dim")
-        text.append(profile["username"], style="cyan bold")
-        text.append(f" ({profile['similarity_score']}% match)\n", style="yellow")
-        text.append("└─ Full Name: ", style="dim")
-        text.append(f"{profile['full_name'] or 'N/A'}\n", style="green")
-        text.append("└─ Profile URL: ", style="dim")
-        text.append(f"https://instagram.com/{profile['username']}\n", style="blue underline")
-        text.append("└─ Private Account: ", style="dim")
-        text.append(f"{'Yes' if profile['is_private'] else 'No'}\n", style="red" if profile["is_private"] else "green")
-        console.print(text)
-
-def main():
-    """Main entry point for the CLI."""
-    parser = argparse.ArgumentParser(
-        description="Search Instagram profiles using natural language queries",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python -m query_embedding.main "food bloggers in melbourne"
-  python -m query_embedding.main "photographers who post about nature"
-  python -m query_embedding.main "fitness influencers who share workout tips"
-        """
+def parse_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(description="Search Instagram profiles using natural language.")
+    parser.add_argument("query", help="Natural language query")
+    
+    # Follower count filters
+    follower_group = parser.add_mutually_exclusive_group()
+    follower_group.add_argument(
+        "--follower-category",
+        choices=["nano", "micro", "macro", "mega"],
+        help="Filter by follower category (nano: 1K-10K, micro: 10K-100K, macro: 100K-1M, mega: 1M+)"
     )
+    follower_group.add_argument(
+        "--min-followers",
+        type=int,
+        help="Minimum follower count"
+    )
+    follower_group.add_argument(
+        "--max-followers",
+        type=int,
+        help="Maximum follower count"
+    )
+    
+    # Account type filter
     parser.add_argument(
-        "query",
-        help="Natural language query to search for similar profiles"
+        "--account-type",
+        choices=["human", "brand"],
+        help="Filter by account type"
     )
+    
+    # Search parameters
     parser.add_argument(
         "--limit",
         type=int,
         default=20,
-        help="Maximum number of results to return (default: 20)"
+        help="Maximum number of results to return"
     )
     parser.add_argument(
         "--threshold",
         type=float,
         default=0.0,
-        help="Minimum similarity score (0-1) for matches (default: 0.0)"
+        help="Minimum similarity score threshold"
     )
-    args = parser.parse_args()
+    
+    return parser.parse_args()
 
+def main():
+    """Main entry point."""
+    args = parse_args()
+    
+    # Initialize searcher
+    searcher = QdrantSearcher(top_k=args.limit, score_threshold=args.threshold)
+    
+    # Build filters
+    filters = {}
+    
+    # Handle follower count filters
+    if args.follower_category:
+        # Category ranges
+        ranges = {
+            "nano": (1_000, 10_000),
+            "micro": (10_000, 100_000),
+            "macro": (100_000, 1_000_000),
+            "mega": (1_000_000, None)
+        }
+        min_followers, max_followers = ranges[args.follower_category]
+        filters["follower_count"] = (min_followers, max_followers)
+    elif args.min_followers is not None:
+        filters["follower_count"] = (args.min_followers, None)
+    elif args.max_followers is not None:
+        filters["follower_count"] = (0, args.max_followers)
+    
+    # Handle account type filter
+    if args.account_type:
+        filters["account_type"] = args.account_type
+    
     try:
-        # Initialize components
-        console.print("[bold]Initializing search components...[/bold]")
-        embedder = QueryEmbedder()
-        searcher = QdrantSearcher(top_k=args.limit, score_threshold=args.threshold)
-
-        # Generate query embedding
-        console.print(f"\n[bold]Processing query:[/bold] {args.query}")
-        query_vector = embedder.embed_query(args.query)
-
-        # Search for similar profiles
-        console.print("\n[bold]Searching for matching profiles...[/bold]")
-        results = searcher.search_profiles(query_vector)
-
-        # Display results
+        # Perform search
+        results = searcher.search(args.query, filters=filters)
         format_results(results)
-
     except Exception as e:
-        console.print(f"\n[bold red]Error:[/bold red] {str(e)}")
+        console.print(f"[red]Error:[/red] {str(e)}")
         sys.exit(1)
 
 if __name__ == "__main__":

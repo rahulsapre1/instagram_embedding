@@ -2,12 +2,14 @@
 Qdrant vector database utilities for searching Instagram profile embeddings.
 """
 import os
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional, Union, Tuple
 import numpy as np
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
-from qdrant_client.http.models import Distance, SearchParams
+from qdrant_client.http.models import Distance, SearchParams, Filter, FieldCondition, Range, MatchValue
 from dotenv import load_dotenv
+from query_embedding.follower_utils import FollowerCountConverter
+from query_embedding.embedder import QueryEmbedder
 
 # Load environment variables
 load_dotenv()
@@ -25,81 +27,91 @@ class QdrantSearcher:
         Args:
             collection_name: Name of the collection to search
             top_k: Number of results to return
-            score_threshold: Minimum similarity score (0 to 1)
+            score_threshold: Minimum similarity score threshold
         """
-        self.url = os.getenv("QDRANT_HOST", "http://localhost:6333")
-        self.api_key = os.getenv("QDRANT_API_KEY")
+        self.client = QdrantClient(
+            url=os.getenv("QDRANT_HOST", "http://localhost:6333"),
+            api_key=os.getenv("QDRANT_API_KEY")
+        )
         self.collection_name = collection_name
         self.top_k = top_k
         self.score_threshold = score_threshold
-        
-        # Initialize client
-        client_kwargs = {
-            "url": self.url,
-            "timeout": 10.0
-        }
-        if self.api_key:
-            client_kwargs["api_key"] = self.api_key
-            
-        self.client = QdrantClient(**client_kwargs)
-        
-        # Verify collection exists
-        collections = self.client.get_collections().collections
-        if not any(c.name == collection_name for c in collections):
-            raise ValueError(f"Collection '{collection_name}' not found")
-
-    def search_profiles(
-        self,
-        query_vector: np.ndarray,
-        limit: int = None,
-        threshold: float = None
-    ) -> List[Dict[str, Any]]:
+        self.embedder = QueryEmbedder()
+    
+    def build_filters(self, filters: Dict[str, Any]) -> Optional[Filter]:
         """
-        Search for similar profiles using a query vector.
+        Build Qdrant filters from filter dictionary.
         
         Args:
-            query_vector: Query embedding vector
-            limit: Optional override for number of results
-            threshold: Optional override for score threshold
-            
+            filters: Dictionary of filters
+                - follower_count: Tuple[int, Optional[int]] for (min, max) range
+                - account_type: str for exact match
+        
         Returns:
-            List of matching profiles with similarity scores
+            Qdrant Filter object or None if no filters
         """
-        try:
-            # Set search parameters
-            search_params = SearchParams(
-                hnsw_ef=128,
-                exact=False
+        if not filters:
+            return None
+            
+        conditions = []
+        
+        # Handle follower count range
+        if "follower_count" in filters:
+            min_followers, max_followers = filters["follower_count"]
+            range_filter = {"gte": min_followers}
+            if max_followers is not None:
+                range_filter["lt"] = max_followers
+            conditions.append(
+                FieldCondition(
+                    key="follower_count",
+                    range=Range(**range_filter)
+                )
             )
-            
-            # Perform search
-            results = self.client.search(
-                collection_name=self.collection_name,
-                query_vector=query_vector.tolist(),
-                limit=limit or self.top_k,
-                score_threshold=threshold or self.score_threshold,
-                search_params=search_params
+        
+        # Handle account type
+        if "account_type" in filters:
+            conditions.append(
+                FieldCondition(
+                    key="account_type",
+                    match=MatchValue(value=filters["account_type"])
+                )
             )
+        
+        if not conditions:
+            return None
             
-            # Format results
-            matches = []
-            for hit in results:
-                # Convert similarity score to percentage
-                score_pct = round(hit.score * 100, 2)
-                
-                # Extract profile data
-                profile = {
-                    "username": hit.payload.get("username"),
-                    "user_id": hit.payload.get("user_id"),
-                    "full_name": hit.payload.get("full_name"),
-                    "is_private": hit.payload.get("is_private"),
-                    "profile_pic_url": hit.payload.get("profile_pic_url"),
-                    "similarity_score": score_pct
-                }
-                matches.append(profile)
-            
-            return matches
-            
-        except Exception as e:
-            print(f"Error searching profiles: {str(e)}")
-            return []
+        return Filter(must=conditions)
+    
+    def search(
+        self,
+        query: str,
+        filters: Optional[Dict[str, Any]] = None
+    ) -> List[models.ScoredPoint]:
+        """
+        Search for profiles using a natural language query.
+        
+        Args:
+            query: Natural language query string
+            filters: Optional dictionary of filters
+                - follower_count: Tuple[int, Optional[int]] for (min, max) range
+                - account_type: str for exact match
+        
+        Returns:
+            List of scored points with payloads
+        """
+        # Get query embedding
+        query_embedding = self.embedder.embed_query(query)  # Fixed: using correct method name
+        
+        # Build filter
+        filter_obj = self.build_filters(filters)
+        
+        # Search
+        results = self.client.search(
+            collection_name=self.collection_name,
+            query_vector=query_embedding.tolist(),
+            limit=self.top_k,
+            score_threshold=self.score_threshold,
+            query_filter=filter_obj
+        )
+        
+        return results
