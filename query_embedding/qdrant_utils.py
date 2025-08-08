@@ -85,7 +85,9 @@ class QdrantSearcher:
     def search(
         self,
         query: str,
-        filters: Optional[Dict[str, Any]] = None
+        filters: Optional[Dict[str, Any]] = None,
+        offset: int = 0,
+        limit: Optional[int] = None
     ) -> List[models.ScoredPoint]:
         """
         Search for profiles using a natural language query.
@@ -95,23 +97,63 @@ class QdrantSearcher:
             filters: Optional dictionary of filters
                 - follower_count: Tuple[int, Optional[int]] for (min, max) range
                 - account_type: str for exact match
-        
+                - username: str for exact match
+            offset: Starting offset for pagination
+            limit: Maximum number of results to return (overrides top_k)
+            
         Returns:
             List of scored points with payloads
         """
         # Get query embedding
-        query_embedding = self.embedder.embed_query(query)  # Fixed: using correct method name
+        query_embedding = self.embedder.embed_query(query)
         
-        # Build filter
-        filter_obj = self.build_filters(filters)
+        # Build filter conditions
+        conditions = []
+        
+        if filters:
+            # Handle follower count range
+            if "follower_count" in filters:
+                min_followers, max_followers = filters["follower_count"]
+                range_filter = {"gte": min_followers}
+                if max_followers is not None:
+                    range_filter["lt"] = max_followers
+                conditions.append(
+                    FieldCondition(
+                        key="follower_count",
+                        range=Range(**range_filter)
+                    )
+                )
+            
+            # Handle account type
+            if "account_type" in filters:
+                conditions.append(
+                    FieldCondition(
+                        key="account_type",
+                        match=MatchValue(value=filters["account_type"])
+                    )
+                )
+                
+            # Handle username exact match
+            if "username" in filters:
+                conditions.append(
+                    FieldCondition(
+                        key="username",
+                        match=MatchValue(value=filters["username"])
+                    )
+                )
+        
+        # Create filter object if conditions exist
+        filter_obj = Filter(must=conditions) if conditions else None
         
         # Search
         results = self.client.search(
             collection_name=self.collection_name,
             query_vector=query_embedding.tolist(),
-            limit=self.top_k,
+            limit=limit or self.top_k,
+            offset=offset,
             score_threshold=self.score_threshold,
-            query_filter=filter_obj
+            query_filter=filter_obj,
+            with_vectors=True  # Include vectors in results
         )
         
         return results

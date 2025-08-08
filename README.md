@@ -1,67 +1,135 @@
-Instagram Profile Embedder + Qdrant Vector Search
+# Instagram Profile Classifier
 
-This project creates a single semantic vector for each Instagram profile using:
+A hybrid classification system that uses CLIP embeddings and Gemini 2.5 Flash-Lite to classify Instagram profiles as either human accounts or brand accounts.
 
-Profile picture
-Bio
-12 post images
-12 post captions
-It uses jina-clip-v2 to embed both images and text, combines them with weighted averaging, and stores the vectors and metadata in Qdrant Cloud for similarity search.
+## Features
 
-Project Structure:
+- **Hybrid Classification**: Combines two powerful approaches:
+  - CLIP embeddings for visual and textual understanding
+  - Gemini 2.5 Flash-Lite for natural language analysis
+- **Profile Analysis**: Analyzes multiple aspects of Instagram profiles:
+  - Profile pictures and post images
+  - Bio text and captions
+  - Account metrics (followers, etc.)
+- **Vector Database**: Uses Qdrant for efficient storage and retrieval of profile embeddings
+- **Rate Limiting**: Built-in rate limiting for Gemini API (10 RPM, 250000 TPM, 1000 RPD)
+- **Batch Processing**: Support for processing multiple profiles in batches
+- **Progress Tracking**: Saves progress and provides detailed statistics
 
-instagram_embedding/
-├── main.py               # Main entry point for embedding + uploading
-├── embedder.py           # Handles downloading and embedding
-├── qdrant_utils.py       # Sets up Qdrant collection and handles vector storage
-├── image_utils.py        # (Optional) Extra image handling functions
-├── data/                 # (Optional) Local image cache
-├── requirements.txt      # All dependencies
-└── README.txt            # This file
-Features:
+## Installation
 
-Download and process remote images and text
-Uses jina-clip-v2 for multi-modal embeddings
-Weighted averaging of profile + post content
-Store in Qdrant Cloud (free tier)
-Query similar Instagram profiles
-Requirements:
+1. Clone the repository:
+```bash
+git clone [repository-url]
+cd instagram_embedding
+```
 
-Python 3.10 (tested with Apple M1)
-No CUDA required (runs on CPU)
-Qdrant Cloud (free tier works)
-Installation:
-
-Clone the repo:
-git clone https://github.com/yourusername/instagram-embedder.git
-cd instagram-embedder
-Create and activate a virtual environment:
-brew install pyenv
-pyenv install 3.10.13
-pyenv virtualenv 3.10.13 insta-embed-env
-pyenv activate insta-embed-env
-Install dependencies:
+2. Install dependencies:
+```bash
 pip install -r requirements.txt
-Set up Qdrant Cloud:
-Create a Qdrant Cloud account: https://cloud.qdrant.io
-Create a cluster and copy:
-Cluster URL
-API Key
-Set environment variables (or edit qdrant_utils.py):
-export QDRANT_API_KEY=your-api-key
-export QDRANT_HOST=https://your-cluster.cloud.qdrant.io
-How It Works:
+```
 
-The embedding process includes:
+3. Set up environment variables in `.env`:
+```bash
+# Supabase Configuration
+SUPABASE_URL=your_supabase_url
+SUPABASE_KEY=your_supabase_key
 
-Profile picture → image embedding
-Bio → text embedding
-12 post images → image embeddings
-12 post captions → text embeddings
-Each component has a default weight:
+# Qdrant Configuration
+QDRANT_API_KEY=your_qdrant_key
+QDRANT_HOST=http://localhost:6333
+VECTOR_DIM=128
 
-bio: 2
-profile_pic: 2
-caption: 1
-post_image: 1
-All vectors are averaged using these weights to form a single 512-dimensional vector per profile.
+# Google Gemini Configuration
+GEMINI_API_KEY=your_gemini_key
+GEMINI_MODEL=gemini-2.0-flash-exp
+```
+
+## Usage
+
+### Single Profile Lookup
+To look up information about a specific profile:
+
+```bash
+python -m query_embedding.get_profile
+```
+
+### Batch Classification
+To run classification on multiple profiles:
+
+```bash
+python -m query_embedding.batch_classify
+```
+
+### Test Classification
+To test the hybrid classifier on a sample of profiles:
+
+```bash
+python -m query_embedding.test_hybrid_classifier
+```
+
+## Architecture
+
+### Components
+
+1. **Account Classifier** (`account_classifier.py`):
+   - Implements hybrid classification using CLIP and Gemini
+   - Handles rate limiting and error recovery
+
+2. **Embedder** (`embedder.py`):
+   - Generates CLIP embeddings for text and images
+   - Handles dimension reduction and normalization
+
+3. **Qdrant Utils** (`qdrant_utils.py`):
+   - Manages vector database operations
+   - Handles search and filtering
+
+4. **Supabase Utils** (`supabase_utils.py`):
+   - Fetches profile data from Supabase
+   - Handles data transformation
+
+### Classification Process
+
+1. **Data Collection**:
+   - Fetch profile data from Supabase
+   - Extract text content (bio, captions)
+   - Download profile images
+
+2. **Feature Extraction**:
+   - Generate CLIP embeddings for text and images
+   - Combine embeddings with appropriate weights
+
+3. **Classification**:
+   - Run CLIP-based classification
+   - Run Gemini-based classification
+   - Compare results and determine final classification
+
+4. **Storage**:
+   - Store embeddings and classification results in Qdrant
+   - Update profile metadata
+
+## Rate Limits
+
+- **Gemini API**:
+  - 10 requests per minute
+  - 250,000 tokens per minute
+  - 1,000 requests per day
+
+## Error Handling
+
+- Automatic retry on API failures
+- Progress saving on interruption
+- Batch failure recovery
+- Rate limit management
+
+## Contributing
+
+1. Fork the repository
+2. Create your feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a new Pull Request
+
+## License
+
+[Your License Here]
