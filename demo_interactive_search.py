@@ -144,7 +144,11 @@ class DemoInteractiveSearchSession:
         while True:
             try:
                 # Get user input
-                user_input = input("\n🔍 You: ").strip()
+                try:
+                    user_input = input("\n🔍 You: ").strip()
+                except EOFError:
+                    print("\n\n👋 End of input reached. Goodbye!")
+                    break
                 
                 if user_input.lower() in ['quit', 'exit', 'bye']:
                     print("\n👋 Thanks for trying the demo! Goodbye!")
@@ -202,6 +206,7 @@ class DemoInteractiveSearchSession:
             except Exception as e:
                 print(f"\n❌ Error: {str(e)}")
                 print("Please try again or type 'help' for assistance.")
+                break
     
     def _display_response(self, response: Dict[str, Any]):
         """Display the response."""
