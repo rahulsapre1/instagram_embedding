@@ -19,7 +19,7 @@ class SupabaseClient:
             raise ValueError("SUPABASE_URL and SUPABASE_KEY must be set in environment variables")
         
         self.client = create_client(url, key)
-        self.table_name = "ig_profile_merged_v0_0"
+        self.table_name = "ig_profile_info_v0_0"
 
     async def fetch_profiles(self, batch_size: int = 32, offset: int = 0) -> List[Dict[str, Any]]:
         """
@@ -97,13 +97,19 @@ class SupabaseClient:
     async def get_total_profiles(self) -> int:
         """Get total number of profiles in the database."""
         try:
+            # Use count() instead of fetching all records
             response = self.client.table(self.table_name)\
-                .select("*", count="exact")\
+                .select("user_id", count="exact")\
                 .execute()
-            return len(response.data)
+            
+            # Get the count from the response
+            count = response.count if hasattr(response, 'count') else 3000  # Fallback to 3000 if count not available
+            print(f"\n📊 Total profiles in database: {count}")
+            return count
+            
         except Exception as e:
             print(f"Error getting total profiles: {e}")
-            return 0
+            return 3000  # Default to 3000 if count fails
 
     def extract_post_urls(self, profile: Dict[str, Any]) -> List[str]:
         """Extract post URLs from a profile dictionary."""

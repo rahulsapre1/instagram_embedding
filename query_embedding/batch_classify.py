@@ -69,7 +69,7 @@ class BatchClassifier:
                         'bio': payload.get('bio', ''),
                         'captions': payload.get('captions', []),
                         'follower_count': payload.get('follower_count', 0),
-                        'follower_category': payload.get('follower_category', ''),
+                        'influencer_type': payload.get('influencer_type', ''),
                         'embedding': result.vector
                     })
                     self.processed_profiles.add(username)

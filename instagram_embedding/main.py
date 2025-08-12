@@ -58,10 +58,9 @@ class InstagramEmbeddingPipeline:
             # Skip if already exists
             if skip_existing:
                 print("\n📊 Checking if profile exists in Qdrant...")
-                info = self.qdrant.get_collection_info()
-                if info.get('points_count', 0) > 0:
+                if self.qdrant.profile_exists(profile_id):
                     print(f"⏭️  Profile {profile_id} already exists, skipping...")
-                    return None
+                    return {"skipped": True, "profile_id": profile_id}
                 print("✅ Profile not found in Qdrant, proceeding...")
             
             # Download images
@@ -125,8 +124,7 @@ class InstagramEmbeddingPipeline:
                 'username': profile.get('username'),
                 'user_id': profile.get('user_id'),
                 'full_name': profile.get('full_name'),
-                'is_private': profile.get('is_private'),
-                'profile_pic_url': profile.get('profile_pic_url_hd')
+                'is_private': profile.get('is_private')
             }
             print("Metadata fields prepared:", ", ".join(metadata.keys()))
             
@@ -136,26 +134,27 @@ class InstagramEmbeddingPipeline:
             storage_results = self.qdrant.store_profile_vectors(
                 profile_id=profile_id,
                 metadata=metadata,
-                combined_vector=embeddings.get('combined')
+                combined_vector=embeddings.get('combined'),
+                skip_existing=skip_existing
             )
             
             # Log storage results
             print("\nStorage Results:")
-            for component, success in storage_results.items():
-                status = "✅ Success" if success else "❌ Failed"
-                print(f"  ▪️ {component}: {status}")
-            
-            success_count = sum(1 for result in storage_results.values() if result)
-            if success_count > 0:
+            if storage_results["skipped"]:
+                print("⏭️  Profile was skipped (already exists)")
+                return {"skipped": True, "profile_id": profile_id}
+            elif storage_results["stored"]:
+                print("✅ Successfully stored profile vectors")
                 print(f"\n✨ Successfully processed profile {profile_id}")
                 return {
                     'profile_id': profile_id,
                     'embeddings': embeddings,
                     'metadata': metadata,
-                    'storage_results': storage_results
+                    'storage_results': storage_results,
+                    'skipped': False
                 }
             else:
-                print(f"\n❌ Failed to store any vectors for profile {profile_id}")
+                print(f"\n❌ Failed to store vectors for profile {profile_id}")
                 return None
                 
         except Exception as e:
@@ -259,9 +258,13 @@ class InstagramEmbeddingPipeline:
                 results = await self.process_batch(profiles, skip_existing)
                 processed += len(profiles)
                 
+                # Count successful and skipped profiles
+                successful = sum(1 for r in results if r and not r.get('skipped', False))
+                skipped = sum(1 for r in results if r and r.get('skipped', False))
+                
                 logger.info(
                     f"Processed {processed}/{total} profiles "
-                    f"({len(results)} successful)"
+                    f"({successful} successful, {skipped} skipped)"
                 )
                 
             logger.info("Pipeline completed successfully!")

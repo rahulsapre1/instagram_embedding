@@ -106,11 +106,40 @@ class QdrantManager:
         except Exception as e:
             raise Exception(f"Failed to create collection {collection_name}: {str(e)}")
 
+    def profile_exists(self, profile_id: int) -> bool:
+        """
+        Check if a profile already exists in the database.
+        
+        Args:
+            profile_id: Unique identifier for the profile
+            
+        Returns:
+            True if profile exists, False otherwise
+        """
+        try:
+            response = self.client.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="user_id",
+                            match=models.MatchValue(value=profile_id)
+                        )
+                    ]
+                ),
+                limit=1
+            )
+            return len(response[0]) > 0
+        except Exception as e:
+            print(f"Error checking profile existence: {str(e)}")
+            return False
+
     def store_profile_vectors(
         self,
         profile_id: int,
         metadata: Dict,
-        combined_vector: np.ndarray
+        combined_vector: np.ndarray,
+        skip_existing: bool = True
     ) -> Dict[str, bool]:
         """
         Store the combined vector for a profile.
@@ -119,14 +148,21 @@ class QdrantManager:
             profile_id: Unique identifier for the profile
             metadata: Profile metadata
             combined_vector: Combined embedding vector
+            skip_existing: If True, skip profiles that already exist
             
         Returns:
-            Dictionary of success flags
+            Dictionary with results and skip status
         """
-        results = {}
+        results = {"stored": False, "skipped": False}
+        
+        # Check if profile exists and should be skipped
+        if skip_existing and self.profile_exists(profile_id):
+            print(f"Profile {profile_id} already exists, skipping...")
+            results["skipped"] = True
+            return results
         
         # Store combined vector
-        results["combined"] = self._store_vector(
+        results["stored"] = self._store_vector(
             self.collection_name,
             profile_id,
             combined_vector,
@@ -261,8 +297,61 @@ class QdrantManager:
                 "points_count": collection_info.points_count,
                 "segments_count": collection_info.segments_count,
                 "status": collection_info.status,
-                "optimization_enabled": collection_info.optimizer_status.ok
+                "optimizer_status": str(collection_info.optimizer_status)
             }
         except Exception as e:
             print(f"Error getting info for {self.collection_name}: {str(e)}")
             return {}
+            
+    def remove_profile_pic_url(self, batch_size: int = 100) -> Dict[str, int]:
+        """
+        Remove profile_pic_url field from all records in the collection.
+        
+        Args:
+            batch_size: Number of records to process in each batch
+            
+        Returns:
+            Dictionary with count of processed and failed records
+        """
+        results = {"processed": 0, "failed": 0}
+        offset = None
+        
+        try:
+            while True:
+                # Get batch of points
+                response = self.client.scroll(
+                    collection_name=self.collection_name,
+                    limit=batch_size,
+                    offset=offset,
+                    with_payload=True,
+                    with_vectors=False
+                )
+                
+                points, offset = response
+                if not points:
+                    break
+                    
+                # Process each point in the batch
+                for point in points:
+                    try:
+                        # Remove profile_pic_url from payload
+                        self.client.set_payload(
+                            collection_name=self.collection_name,
+                            payload={
+                                'profile_pic_url': None  # This will remove the field
+                            },
+                            points=[point.id]
+                        )
+                        results["processed"] += 1
+                    except Exception as e:
+                        print(f"Error processing point {point.id}: {str(e)}")
+                        results["failed"] += 1
+                
+                if offset is None:
+                    break
+                    
+            return results
+            
+        except Exception as e:
+            print(f"Error in remove_profile_pic_url: {str(e)}")
+            return results

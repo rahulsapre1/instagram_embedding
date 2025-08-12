@@ -65,7 +65,7 @@ def get_profile_info(username: str):
         print("\n🏷️  Classification:")
         print(f"  • Account Type: {payload.get('account_type', 'N/A')}")
         print(f"  • Follower Count: {payload.get('follower_count', 'N/A'):,}")
-        print(f"  • Follower Category: {payload.get('follower_category', 'N/A')}")
+        print(f"  • Influencer Type: {payload.get('influencer_type', 'N/A').capitalize()}")
         
         # Content
         print("\n📝 Content:")

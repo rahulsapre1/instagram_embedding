@@ -9,9 +9,9 @@ from rich.table import Table
 from rich.panel import Panel
 from rich.text import Text
 
-from query_embedding.embedder import QueryEmbedder
-from query_embedding.qdrant_utils import QdrantSearcher
-from query_embedding.follower_utils import FollowerCountConverter
+from .embedder import QueryEmbedder
+from .qdrant_utils import QdrantSearcher
+from .follower_utils import FollowerCountConverter
 
 console = Console()
 
@@ -39,7 +39,7 @@ def format_results(profiles: List[Dict[str, Any]]) -> None:
             payload.get("username", "N/A"),
             payload.get("full_name", "N/A"),
             f"{payload.get('follower_count', 0):,}",
-            payload.get("follower_category", "N/A"),
+            payload.get("influencer_type", "N/A").capitalize(),
             payload.get("account_type", "N/A"),
             f"{profile.score:.3f}"
         )
