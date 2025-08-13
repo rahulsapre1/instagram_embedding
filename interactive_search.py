@@ -65,14 +65,15 @@ class GeminiSearchInterface:
     
     def __init__(self):
         """Initialize the Gemini interface."""
-        api_key = os.getenv("GOOGLE_API_KEY")
+        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         if not api_key:
-            raise ValueError("GOOGLE_API_KEY environment variable is required")
+            raise ValueError("GEMINI_API_KEY or GOOGLE_API_KEY environment variable is required")
         
         genai.configure(api_key=api_key)
         
         # Initialize Gemini model
-        self.model = genai.GenerativeModel('gemini-2.5-flash')
+        model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+        self.model = genai.GenerativeModel(model_name)
         
         # Search context
         self.context = SearchContext()
@@ -202,8 +203,9 @@ Keep responses conversational but focused on building effective search queries."
     def execute_search(self, query: str, filters: Dict[str, Any]) -> str:
         """Execute the search using the existing CLI program."""
         try:
-            # Build CLI command
-            cmd_parts = ["python", "-m", "query_embedding.main", query]
+            # Build CLI command - use sys.executable to get the current Python interpreter
+            python_cmd = sys.executable
+            cmd_parts = [python_cmd, "-m", "query_embedding.main", query]
             
             # Add filters
             if filters.get("follower_category"):
@@ -343,7 +345,6 @@ class InteractiveSearchSession:
                 break
             except Exception as e:
                 print(f"\n❌ Error: {str(e)}")
-                print("Please try again or type 'help' for assistance.")
                 break
     
     def _display_response(self, response: Dict[str, Any]):
