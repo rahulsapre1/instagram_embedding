@@ -8,19 +8,23 @@ __pycache__/
 venv/
 .python-version
 
-# Data and temp files
-data/
+# Data and temp files - allow organized structure, block specific file types
+data/temp/*.txt
+data/temp/*.log
+data/temp/*.csv
+data/temp/*.json
+data/qdrant/
+data/images/
 *.log
 *.csv
 *.json
 progress.txt
 user_ids.txt
 
-# Test files
-test_*.py
-tests/
-inspect_*.py
-update_*.py
+# Test files - allow organized structure, block specific file types
+scripts/tests/test_*.py
+scripts/tests/inspect_*.py
+scripts/tests/update_*.py
 
 # IDE
 .vscode/
