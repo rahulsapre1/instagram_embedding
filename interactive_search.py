@@ -8,11 +8,18 @@ import sys
 import json
 import asyncio
 import subprocess
+import re
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 from datetime import datetime
 import google.generativeai as genai
 from dotenv import load_dotenv
+
+# Import hybrid search components
+try:
+    from query_embedding.hybrid_search import HybridSearchEngine
+except ImportError:
+    HybridSearchEngine = None
 
 # Load environment variables
 load_dotenv()
@@ -237,6 +244,67 @@ Keep responses conversational but focused on building effective search queries."
         except Exception as e:
             return f"Error executing search: {str(e)}"
     
+    async def execute_hybrid_search(self, image_url: str, text_query: str, filters: Dict[str, Any]) -> str:
+        """Execute hybrid image + text search."""
+        if HybridSearchEngine is None:
+            return "Error: Hybrid search components not available. Please install required dependencies."
+        
+        try:
+            # Initialize hybrid search engine
+            hybrid_engine = HybridSearchEngine()
+            
+            # Validate image URL first
+            is_valid = await hybrid_engine.validate_image_url(image_url)
+            if not is_valid:
+                return f"Error: Invalid or inaccessible image URL: {image_url}\nPlease provide a valid image URL and try again."
+            
+            # Perform hybrid search
+            results, weights = await hybrid_engine.search(image_url, text_query)
+            
+            # Format results in the same style as CLI output
+            formatted_results = self._format_hybrid_results(results, weights, image_url, text_query)
+            
+            return formatted_results
+            
+        except Exception as e:
+            return f"Error executing hybrid search: {str(e)}"
+    
+    def _format_hybrid_results(self, results: List, weights: Dict[str, float], 
+                              image_url: str, text_query: str) -> str:
+        """Format hybrid search results to match CLI output style."""
+        output = []
+        output.append("🔍 HYBRID SEARCH RESULTS")
+        output.append("=" * 60)
+        output.append(f"Image URL: {image_url}")
+        output.append(f"Text Query: {text_query}")
+        output.append(f"Weights: Image={weights['image_weight']:.1f}, Text={weights['text_weight']:.1f}")
+        output.append("=" * 60)
+        output.append("")
+        
+        if not results:
+            output.append("No results found.")
+            return "\n".join(output)
+        
+        # Header
+        output.append(f"{'Username':<20} {'Full Name':<25} {'Followers':<12} {'Category':<10} {'Account Type':<12} {'Score':<8}")
+        output.append("-" * 90)
+        
+        # Results
+        for i, result in enumerate(results[:20], 1):  # Limit to 20 results
+            payload = result.payload
+            output.append(
+                f"{payload.get('username', 'N/A'):<20} "
+                f"{payload.get('full_name', 'N/A'):<25} "
+                f"{payload.get('follower_count', 0):<12,} "
+                f"{payload.get('influencer_type', 'N/A').capitalize():<10} "
+                f"{payload.get('account_type', 'N/A'):<12} "
+                f"{result.score:<8.3f}"
+            )
+        
+        output.append("")
+        output.append(f"Found {len(results)} results")
+        return "\n".join(output)
+    
     def update_context(self, action: str, query: str, filters: Dict[str, Any]):
         """Update search context based on action."""
         if action == "search":
@@ -305,6 +373,11 @@ class InteractiveSearchSession:
                 if not user_input:
                     continue
                 
+                # Check for IMAGE: keyword for hybrid search
+                if user_input.upper().startswith("IMAGE:"):
+                    await self._handle_hybrid_search(user_input)
+                    continue
+                
                 # Process user input
                 print("\n🤔 Processing your request...")
                 response = await self.interface.process_user_input(user_input)
@@ -351,6 +424,48 @@ class InteractiveSearchSession:
         """Display the Gemini response."""
         print(f"\n🤖 Assistant: {response['explanation']}")
     
+    async def _handle_hybrid_search(self, user_input: str):
+        """Handle hybrid image + text search requests."""
+        try:
+            # Parse IMAGE: URL query format
+            # Format: IMAGE: https://example.com/image.jpg find similar profiles
+            match = re.match(r'IMAGE:\s*(https?://[^\s]+)\s*(.*)', user_input, re.IGNORECASE)
+            
+            if not match:
+                print("\n❌ Invalid IMAGE: format. Use: IMAGE: <URL> <query>")
+                print("Example: IMAGE: https://example.com/image.jpg find similar profiles")
+                return
+            
+            image_url = match.group(1).strip()
+            text_query = match.group(2).strip()
+            
+            if not text_query:
+                print("\n❌ Please provide a text query along with the image URL.")
+                print("Example: IMAGE: City Circle Tram Melbourne find similar profiles")
+                return
+            
+            print(f"\n🖼️  Processing hybrid search...")
+            print(f"Image URL: {image_url}")
+            print(f"Text Query: {text_query}")
+            print("\n🤖 Analyzing query intent and generating weights...")
+            
+            # Execute hybrid search
+            search_results = await self.interface.execute_hybrid_search(
+                image_url, text_query, {}
+            )
+            
+            print("\n📋 Hybrid Search Results:")
+            print("-" * 40)
+            print(search_results)
+            
+            # Add to conversation history
+            self.interface.context.add_conversation("user", f"IMAGE: {image_url} {text_query}")
+            self.interface.context.add_conversation("assistant", f"Executed hybrid search with image and text query")
+            
+        except Exception as e:
+            print(f"\n❌ Error in hybrid search: {str(e)}")
+            print("Please check your image URL and try again.")
+    
     def _show_help(self):
         """Show help information."""
         help_text = """
@@ -360,6 +475,15 @@ class InteractiveSearchSession:
 • Just describe what you're looking for in natural language
 • I'll build the search query and apply appropriate filters
 • Examples: "Find food bloggers in Sydney", "Show me brand accounts with over 100K followers"
+
+🖼️  HYBRID IMAGE + TEXT SEARCH:
+• Use IMAGE: keyword followed by URL and query
+• Format: IMAGE: <URL> <query>
+• Examples: 
+  - IMAGE: https://example.com/image.jpg find similar profiles
+  - IMAGE: https://example.com/photo.png search for travel accounts
+• I'll automatically analyze query intent and assign weights
+• Supports pure text (0.0), pure image (1.0), and mixed weights
 
 🎯 FILTERS:
 • Follower categories: nano (1K-10K), micro (10K-100K), macro (100K-1M), mega (1M+)
