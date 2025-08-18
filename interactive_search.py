@@ -99,19 +99,38 @@ AVAILABLE SEARCH FILTERS:
 SEARCH BEHAVIOR:
 - Build queries incrementally based on user conversation
 - Remember context and previous search criteria
-- Suggest refinements based on user needs
-- Keep final CLI commands short and focused
+- Generate final CLI commands as proper sentences (1-2 full sentences)
+- Each query must specify: subject, key attributes, context, and intent
+- Avoid keyword-only queries - use complete, descriptive sentences
+- Examples of good queries:
+  * "Find Instagram profiles of fashion influencers who specialize in corporate outfits and business wear"
+  * "Show me travel bloggers with a focus on adventure photography and outdoor activities"
+  * "Search for food bloggers who create healthy recipes and wellness content"
 - Use natural language to understand user intent
 
 RESPONSE FORMAT:
 Always respond with a JSON object containing:
 {
     "action": "search" | "refine" | "clarify" | "help",
-    "query": "the search query to execute",
+    "query": "a complete sentence describing what to search for (NOT just keywords)",
     "filters": {filter object},
     "explanation": "explanation of what you're doing",
     "suggestions": ["suggestions for next steps"]
 }
+
+QUERY REQUIREMENTS:
+- The "query" field MUST be a complete sentence (1-2 sentences)
+- Include action verbs like "find", "search", "show", "get"
+- Specify the subject (e.g., "fashion influencers", "travel bloggers")
+- Include key attributes and context
+- Examples of GOOD queries:
+  * "Find Instagram profiles of fashion influencers who specialize in corporate outfits and business wear"
+  * "Search for travel bloggers with a focus on adventure photography and outdoor activities"
+  * "Show me food bloggers who create healthy recipes and wellness content"
+- Examples of BAD queries (avoid):
+  * "corporate outfits" (too short, no verb)
+  * "fashion influencers" (no action, no context)
+  * "travel" (single word, no structure)
 
 Keep responses conversational but focused on building effective search queries."""
 
@@ -165,6 +184,77 @@ Keep responses conversational but focused on building effective search queries."
         
         return "\n".join(context_parts)
     
+    def _improve_query(self, query: str) -> str:
+        """
+        Improve keyword-like queries into proper sentences.
+        
+        Args:
+            query: The original query string
+            
+        Returns:
+            Improved query as a proper sentence
+        """
+        query = query.strip()
+        
+        # If query is already a proper sentence (contains verbs, proper structure), return as is
+        if self._is_proper_sentence(query):
+            return query
+        
+        # Common patterns to improve
+        improvements = {
+            # Fashion and style
+            "corporate outfits": "Find Instagram profiles of fashion influencers who specialize in corporate outfits and business wear",
+            "business wear": "Search for fashion content creators who focus on business and professional attire",
+            "fashion influencers": "Show me Instagram profiles of fashion influencers and style creators",
+            
+            # Travel and lifestyle
+            "travel bloggers": "Find Instagram profiles of travel bloggers and adventure content creators",
+            "food bloggers": "Search for food bloggers and culinary content creators on Instagram",
+            "fitness influencers": "Show me Instagram profiles of fitness influencers and wellness content creators",
+            
+            "profiles": "Find Instagram profiles that match your search criteria",
+            "accounts": "Search for Instagram accounts based on your requirements",
+            "people": "Find Instagram profiles of people who match your search criteria"
+        }
+        
+        # Check for exact matches first
+        for pattern, improvement in improvements.items():
+            if query.lower() == pattern.lower():
+                return improvement
+        
+        # Check for partial matches and improve
+        for pattern, improvement in improvements.items():
+            if pattern.lower() in query.lower():
+                # Replace the pattern with the improvement
+                improved = query.replace(pattern, improvement)
+                if not self._is_proper_sentence(improved):
+                    # If still not a proper sentence, make it one
+                    improved = f"Find Instagram profiles related to {query}"
+                return improved
+        
+        # If no patterns match, create a generic improvement
+        if len(query.split()) <= 3:
+            return f"Find Instagram profiles related to {query}"
+        else:
+            return f"Search for Instagram profiles that match: {query}"
+    
+    def _is_proper_sentence(self, text: str) -> bool:
+        """
+        Check if text is a proper sentence.
+        
+        Args:
+            text: Text to check
+            
+        Returns:
+            True if text appears to be a proper sentence
+        """
+        # Check for basic sentence indicators
+        has_verb = any(word in text.lower() for word in ['find', 'search', 'show', 'get', 'look', 'see', 'discover'])
+        has_structure = len(text.split()) >= 4  # At least 4 words
+        has_context = any(word in text.lower() for word in ['profiles', 'accounts', 'people', 'influencers', 'bloggers', 'creators'])
+        
+        return has_verb and has_structure and has_context
+    
     async def _generate_gemini_response(self, context: str) -> str:
         """Generate response using Gemini."""
         prompt = f"{context}\n\nUser: {self.context.conversation_history[-1]['content']}\n\nAssistant:"
@@ -186,12 +276,16 @@ Keep responses conversational but focused on building effective search queries."
                 # Validate required fields
                 required_fields = ["action", "query", "filters", "explanation", "suggestions"]
                 if all(field in parsed for field in required_fields):
+                    # Improve the query if it's too short or keyword-like
+                    if parsed["action"] == "search":
+                        parsed["query"] = self._improve_query(parsed["query"])
                     return parsed
             
             # Fallback parsing
+            fallback_query = self._improve_query(response.strip())
             return {
                 "action": "search",
-                "query": response.strip(),
+                "query": fallback_query,
                 "filters": {},
                 "explanation": "Parsed response as search query",
                 "suggestions": ["Refine your search", "Add filters", "Ask for help"]
@@ -199,9 +293,10 @@ Keep responses conversational but focused on building effective search queries."
             
         except json.JSONDecodeError:
             # If JSON parsing fails, treat as search query
+            fallback_query = self._improve_query(response.strip())
             return {
                 "action": "search",
-                "query": response.strip(),
+                "query": fallback_query,
                 "filters": {},
                 "explanation": "Treated response as search query",
                 "suggestions": ["Refine your search", "Add filters", "Ask for help"]
