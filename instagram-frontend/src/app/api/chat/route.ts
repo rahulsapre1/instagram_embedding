@@ -1,6 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { spawn } from 'child_process'
-import path from 'path'
 
 // Types for chat request and response
 interface ChatMessage {
@@ -11,162 +9,71 @@ interface ChatMessage {
 
 interface ChatRequest {
   message: string
-  conversation_id?: string
   conversation_history: ChatMessage[]
 }
 
 interface ChatResponse {
   response: string
-  conversation_id: string
-  should_refresh_search: boolean
-  new_search_query?: string
-}
-
-interface APIResult {
-  success: boolean
-  response: string
-  should_search?: boolean
+  should_search: boolean
   search_query?: string
+  results?: InfluencerProfile[]
+  total?: number
 }
 
-// SearchContext class - exact copy from CLI version
-class SearchContext {
-  base_query: string = ""
-  filters: Record<string, unknown> = {}
-  conversation_history: ChatMessage[] = []
-  last_results: unknown[] = []
-
-  add_conversation(role: string, content: string) {
-    this.conversation_history.push({
-      role: role as 'user' | 'assistant',
-      content: content,
-      timestamp: new Date().toISOString()
-    })
-  }
-
-  update_filters(new_filters: Record<string, unknown>) {
-    this.filters = { ...this.filters, ...new_filters }
-  }
-
-  get_filter_summary(): string {
-    if (Object.keys(this.filters).length === 0) {
-      return "No filters applied"
-    }
-    
-    const summaries: string[] = []
-    if (this.filters.follower_category) {
-      summaries.push(`Follower category: ${this.filters.follower_category}`)
-    }
-    if (this.filters.account_type) {
-      summaries.push(`Account type: ${this.filters.account_type}`)
-    }
-    if (this.filters.min_followers) {
-      summaries.push(`Min followers: ${this.filters.min_followers}`)
-    }
-    if (this.filters.max_followers) {
-      summaries.push(`Max followers: ${this.filters.max_followers}`)
-    }
-    
-    return summaries.join(", ")
-  }
+// Types for influencer profiles
+interface InfluencerProfile {
+  username: string
+  full_name: string
+  bio: string
+  follower_count: number
+  category: string
+  account_type: string
+  influencer_type: string
+  score: number
+  is_private: boolean
 }
 
-
-
-// Function to call interactive_search_api.py
-async function callInteractiveSearchAPI(userInput: string, searchContext: SearchContext): Promise<APIResult> {
-  return new Promise((resolve) => {
-    // Path to the interactive_search_api.py script
-    const scriptPath = path.join(process.cwd(), '..', 'interactive_search_api.py')
-    const pythonPath = path.join(process.cwd(), '..', 'venv', 'bin', 'python')
+// Function to call our real backend server
+async function callInteractiveSearchAPI(userInput: string, conversationHistory: ChatMessage[]): Promise<ChatResponse> {
+  try {
+    // Call our real backend server
+    const response = await fetch('http://localhost:8000/api/chat', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        message: userInput,
+        conversation_history: conversationHistory
+      }),
+    })
     
-    console.log('Calling interactive search API with input:', userInput)
-    console.log('Conversation history length:', searchContext.conversation_history.length)
-    
-    // Check if files exist
-    try {
-      const fs = require('fs')
-      if (!fs.existsSync(scriptPath)) {
-        resolve({ success: false, response: 'Interactive search API script not found' })
-        return
-      }
-      if (!fs.existsSync(pythonPath)) {
-        resolve({ success: false, response: 'Python not found' })
-        return
-      }
-    } catch (error) {
-      resolve({ success: false, response: 'Failed to check file existence' })
-      return
+    if (!response.ok) {
+      throw new Error(`Backend server error: ${response.status}`)
     }
     
-    // Spawn Python process
-    const pythonProcess = spawn(pythonPath, [scriptPath], {
-      cwd: path.join(process.cwd(), '..'),
-      env: { 
-        ...process.env, 
-        PYTHONPATH: path.join(process.cwd(), '..'),
-        PATH: `${path.join(process.cwd(), '..', 'venv', 'bin')}:${process.env.PATH}`
-      }
-    })
+    const result = await response.json()
     
-    let output = ''
-    let errorOutput = ''
-    
-    // Handle stdout
-    pythonProcess.stdout.on('data', (data: Buffer) => {
-      output += data.toString()
-    })
-    
-    // Handle stderr
-    pythonProcess.stderr.on('data', (data: Buffer) => {
-      errorOutput += data.toString()
-    })
-    
-    // Handle process completion
-    pythonProcess.on('close', (code: number | null) => {
-      console.log('Python API process closed with code:', code)
-      console.log('Python API output:', output)
-      
-      if (code === 0) {
-        try {
-          const result = JSON.parse(output) as APIResult
-          resolve(result)
-        } catch (parseError) {
-          console.error('Error parsing Python API response:', parseError)
-          resolve({ success: false, response: 'Failed to parse API response' })
-        }
-      } else {
-        console.error('Python API error:', errorOutput)
-        resolve({ success: false, response: 'Python API failed' })
-      }
-    })
-    
-    // Handle process errors
-    pythonProcess.on('error', (error: Error) => {
-      console.error('Failed to start Python API:', error)
-      resolve({ success: false, response: 'Failed to start Python API' })
-    })
-    
-    // Send user input and conversation history to the Python script
-    const inputData = {
-      message: userInput,
-      conversation_history: searchContext.conversation_history
+    return {
+      response: result.response || 'Sorry, I encountered an error.',
+      should_search: result.should_refresh_search || false,
+      search_query: result.new_search_query || userInput,
+      results: result.results || [],
+      total: result.total || 0
     }
-    pythonProcess.stdin.write(JSON.stringify(inputData) + '\n')
-    pythonProcess.stdin.end()
     
-    // Set timeout to prevent hanging
-    setTimeout(() => {
-      console.log('Python API process timeout, killing...')
-      pythonProcess.kill()
-      resolve({ success: false, response: 'Python API timeout' })
-    }, 30000) // 30 second timeout
-  })
+  } catch (error) {
+    console.error('Error calling backend server:', error)
+    return {
+      response: 'Sorry, I encountered an error. Please try again.',
+      should_search: false
+    }
+  }
 }
 
 export async function POST(request: NextRequest) {
   try {
-    const { message, conversation_id, conversation_history } = await request.json() as ChatRequest
+    const { message, conversation_history } = await request.json() as ChatRequest
 
     if (!message || message.trim() === '') {
       return NextResponse.json(
@@ -175,64 +82,64 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Generate or use existing conversation ID
-    const convId = conversation_id || `conv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
-    
-    // Create a temporary SearchContext with the provided conversation history
-    const searchContext = new SearchContext()
-    
-    // Load the existing conversation history from the frontend
-    if (conversation_history && conversation_history.length > 0) {
-      searchContext.conversation_history = conversation_history
-    }
-
     // Add user message to conversation history
-    searchContext.add_conversation('user', message)
+    // This class is no longer needed as the backend handles context
+    // For now, we'll just pass the history directly
+    const updatedHistory: ChatMessage[] = [...conversation_history, {
+      role: 'user' as const,
+      content: message,
+      timestamp: new Date().toISOString()
+    }]
 
     // Call the actual interactive_search.py script with proper context
     let response: string
     let should_refresh_search = false
     let new_search_query: string | undefined
+    let results: InfluencerProfile[] | undefined
+    let total: number | undefined
 
     try {
-      const apiResult = await callInteractiveSearchAPI(message, searchContext)
+      const chatResponse = await callInteractiveSearchAPI(message, updatedHistory)
       
-      if (apiResult.success) {
-        response = apiResult.response
-        should_refresh_search = apiResult.should_search || false
-        new_search_query = apiResult.search_query
-        
-        console.log('AI response:', response)
-        console.log('Should search:', should_refresh_search)
-        console.log('Search query:', new_search_query)
-      } else {
-        // Handle API error
-        response = apiResult.response || "I encountered an error processing your request."
-      }
+      response = chatResponse.response
+      should_refresh_search = chatResponse.should_search
+      new_search_query = chatResponse.search_query
+      results = chatResponse.results
+      total = chatResponse.total
       
+      console.log('AI response:', response)
+      console.log('Should search:', should_refresh_search)
+      console.log('Search query:', new_search_query)
+      console.log('Results:', results)
+      console.log('Total:', total)
     } catch (error) {
       console.error('Interactive search API error:', error)
-      
-      // Fallback response if Python API fails
-      response = "I'm having trouble processing your request right now. Please try again or rephrase your question."
+      response = "I encountered an error processing your request."
+      should_refresh_search = false
     }
 
     // Add assistant response to conversation history (exact same as CLI version)
-    searchContext.add_conversation('assistant', response)
+    // This class is no longer needed as the backend handles context
+    // For now, we'll just pass the history directly
+    const finalHistory: ChatMessage[] = [...updatedHistory, {
+      role: 'assistant' as const,
+      content: response,
+      timestamp: new Date().toISOString()
+    }]
 
     // Keep only last 20 messages to prevent memory issues (like CLI version)
-    if (searchContext.conversation_history.length > 20) {
-      searchContext.conversation_history = searchContext.conversation_history.slice(-20)
+    if (finalHistory.length > 20) {
+      finalHistory.slice(-20)
     }
 
-    const chatResponse: ChatResponse = {
+    // Return the response with conversation context
+    return NextResponse.json({
       response,
-      conversation_id: convId,
       should_refresh_search,
-      new_search_query: new_search_query
-    }
-
-    return NextResponse.json(chatResponse)
+      new_search_query: new_search_query,
+      results: results,
+      total: total
+    })
 
   } catch (error) {
     console.error('Chat API error:', error)
