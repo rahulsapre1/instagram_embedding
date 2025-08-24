@@ -10,6 +10,10 @@ import os
 from io import StringIO
 from contextlib import redirect_stdout, redirect_stderr
 import logging
+from typing import List, Dict, Any, Optional
+
+# Import the working CLI components
+from interactive_search import SearchContext, GeminiSearchInterface
 
 # Add the current directory to Python path to import modules
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -17,40 +21,25 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # Set up logging to suppress unnecessary output
 logging.basicConfig(level=logging.ERROR)
 
-def process_single_query(user_input, conversation_history=None):
-    """
-    Process a single query using the interactive search logic
-    Returns a JSON response with the assistant's reply
-    """
+def process_single_query(user_input, conversation_history):
+    """Process a single query using the working CLI logic."""
     try:
-        # Import the interactive search modules
-        from query_embedding.embedder import QueryEmbedder
-        from query_embedding.qdrant_utils import QdrantSearcher
-        import google.generativeai as genai
-        from dotenv import load_dotenv
+        # Initialize the Gemini interface
+        gemini_interface = GeminiSearchInterface()
         
-        # Load environment variables
-        load_dotenv()
+        # Initialize search context from conversation history
+        search_context = SearchContext()
+        if conversation_history:
+            search_context.conversation_history = conversation_history
         
-        # Initialize components (similar to interactive_search.py)
-        api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            return {
-                "error": "GOOGLE_API_KEY not found in environment",
-                "response": "I'm sorry, but I'm not properly configured right now. Please check the API configuration.",
-                "should_search": False
-            }
+        # Add the new user message
+        search_context.add_conversation('user', user_input)
         
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.0-flash-exp")
+        # Build conversation context for the AI
+        conversation_context = _build_conversation_context(search_context.conversation_history)
         
-        # Build conversation context exactly like CLI version
-        conversation_context = _build_conversation_context(conversation_history)
-        
-        # Create the system prompt exactly like CLI version
-        system_prompt = """You are an intelligent search assistant for an Instagram profile database. Your role is to help users build search queries incrementally through conversation.
-
-CRITICAL INSTRUCTION: You MUST respond with ONLY a JSON object. No other text, no explanations, no conversation. ONLY the JSON object.
+        # Create the system prompt
+        system_prompt = f"""You are an intelligent search assistant for an Instagram profile database. Your role is to help users build search queries incrementally through conversation.
 
 AVAILABLE SEARCH FILTERS:
 - follower_category: nano (1K-10K), micro (10K-100K), macro (100K-1M), mega (1M+)
@@ -62,77 +51,76 @@ AVAILABLE SEARCH FILTERS:
 
 SEARCH BEHAVIOR:
 - Build queries incrementally based on user conversation
-- Remember context and previous search criteria
-- Generate final CLI commands as proper sentences (1-2 full sentences)
-- Each query must specify: subject, key attributes, context, and intent
-- Avoid keyword-only queries - use complete, descriptive sentences
-- Examples of good queries:
-  * "Find Instagram profiles of fashion influencers who specialize in corporate outfits and business wear"
-  * "Show me travel bloggers with a focus on adventure photography and outdoor activities"
-  * "Search for food bloggers who create healthy recipes and wellness content"
-- Use natural language to understand user intent
+- Remember and apply previous search criteria
+- Always trigger a search when user provides input
+- Return search results in a helpful format
 
-RESPONSE FORMAT (ONLY JSON, NO OTHER TEXT):
-{
-    "action": "search",
-    "query": "a complete sentence describing what to search for (NOT just keywords)",
-    "filters": {},
-    "explanation": "brief explanation of what you're doing"
-}
+{conversation_context}
 
-QUERY REQUIREMENTS:
-- The "query" field MUST be a complete sentence (1-2 sentences)
-- Include action verbs like "find", "search", "show", "get"
-- Specify the subject (e.g., "fashion influencers", "travel bloggers")
-- Include key attributes and context
-- Examples of GOOD queries:
-  * "Find Instagram profiles of fashion influencers who specialize in corporate outfits and business wear"
-  * "Search for travel bloggers with a focus on adventure photography and outdoor activities"
-  * "Show me food bloggers who create healthy recipes and wellness content"
-- Examples of BAD queries (avoid):
-  * "corporate outfits" (too short, no verb)
-  * "fashion influencers" (no action, no context)
-  * "travel" (single word, no structure)
+User: {user_input}
 
-REMEMBER: ONLY respond with the JSON object. No other text."""
-        
-        # Process the user input with conversation context exactly like CLI version
-        prompt = f"{conversation_context}\n\nUser: {user_input}\n\nAssistant:"
+Assistant: I'll help you search for Instagram profiles. Let me execute the search based on our conversation context."""
         
         # Generate response using Gemini
-        response = model.generate_content(prompt)
+        response = gemini_interface.model.generate_content(system_prompt)
         assistant_response = response.text.strip()
         
-        # Parse the response to extract search query and action
-        parsed_response = _parse_gemini_response(assistant_response)
-        
-        # ALWAYS trigger search - the AI should handle all user inputs as search requests
+        # ALWAYS trigger search - use the working CLI logic
         should_search = True
         
-        # Try LLM-based concise query composer first (history + latest input)
-        composed = _compose_concise_query(conversation_history, user_input)
-        if composed:
-            search_query = composed
-        else:
-            # Fallback: deterministic builder from history + input
-            search_query = _build_comprehensive_query(user_input, conversation_history)
+        # Build the search query using the working context builder
+        search_query = _build_comprehensive_query(user_input, conversation_history)
         
-        # Normalize and improve
-        search_query = _improve_query(search_query)
-        
-        # Ensure the search query is a single, natural line without helper verbs
-        if not _is_proper_sentence(search_query) and not search_query.lower().startswith('instagram profiles'):
-            search_query = f"Instagram profiles of {search_query}"
-        
-        # Final single-line normalization
-        search_query = search_query.replace('\n', ' ').strip()
-        
-        return {
-            "response": assistant_response,
-            "should_search": should_search,
-            "search_query": search_query,
-            "success": True
-        }
+        # Execute the actual search using the existing search logic
+        try:
+            # Import and use the working search engine
+            from query_embedding.qdrant_utils import QdrantSearcher
+            
+            # Initialize search engine
+            search_engine = QdrantSearcher()
+            
+            # Execute search with the query
+            search_results = search_engine.search(
+                query=search_query,
+                limit=20
+            )
+            
+            # Format results for frontend
+            formatted_results = []
+            for result in search_results:
+                payload = result.payload
+                formatted_results.append({
+                    "username": payload.get("username", ""),
+                    "full_name": payload.get("full_name", ""),
+                    "bio": payload.get("bio", ""),
+                    "follower_count": payload.get("follower_count", 0),
+                    "category": payload.get("category", ""),
+                    "account_type": payload.get("account_type", "human"),
+                    "influencer_type": payload.get("influencer_type", ""),
+                    "score": result.score,
+                    "is_private": payload.get("is_private", False)
+                })
+            
+            return {
+                "response": assistant_response,
+                "should_search": should_search,
+                "search_query": search_query,
+                "results": formatted_results,
+                "total": len(formatted_results),
+                "success": True
+            }
+            
+        except ImportError:
+            # Fallback if search engine not available
+            return {
+                "response": assistant_response,
+                "should_search": should_search,
+                "search_query": search_query,
+                "results": [],
+                "total": 0,
+                "success": True,
+                "note": "Search engine not available, but query was built successfully"
+            }
         
     except Exception as e:
         return {
@@ -178,7 +166,7 @@ def _compose_concise_query(conversation_history, user_input):
             f"Return only the final query line:"
         )
 
-        response = model.generate_content(prompt)
+        response = gemini_interface.model.generate_content(prompt)
         raw = (response.text or "").strip()
         # Normalize to one line, strip quotes
         query_line = raw.replace("\n", " ").strip().strip('"\'')
